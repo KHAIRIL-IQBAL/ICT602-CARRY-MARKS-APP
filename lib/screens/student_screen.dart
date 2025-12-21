@@ -3,107 +3,122 @@ import 'package:provider/provider.dart';
 import '../app_state.dart';
 import 'login_screen.dart';
 
-const gradeBounds = {
-  'A+': 90,
-  'A': 80,
-  'A-': 75,
-  'B+': 70,
-  'B': 65,
-  'B-': 60,
-  'C+': 55,
-  'C': 50,
-};
-
 class StudentScreen extends StatefulWidget {
   const StudentScreen({super.key});
+
   @override
   State<StudentScreen> createState() => _StudentScreenState();
 }
 
 class _StudentScreenState extends State<StudentScreen> {
-  double test = 0, assignment = 0, project = 0;
-  bool loading = true;
-  String studentId = '';
+  // Grade targets
+  final Map<String, int> gradeTargets = {
+    'A+': 90,
+    'A': 80,
+    'A-': 75,
+    'B+': 70,
+    'B': 65,
+    'B-': 60,
+    'C+': 55,
+    'C': 50,
+  };
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
-  }
-
-  Future<void> _load() async {
-    final app = Provider.of<AppState>(context, listen: false);
-    await app.loadMarks();
-    final u = app.currentUser!;
-    studentId = (u['studentId'] ?? '').toString();
-    if (app.marks != null) {
-      test = (app.marks!['test'] ?? 0.0).toDouble();
-      assignment = (app.marks!['assignment'] ?? 0.0).toDouble();
-      project = (app.marks!['project'] ?? 0.0).toDouble();
-    }
-    setState(() {
-      loading = false;
-    });
-  }
-
-  double requiredFinalExamForTarget(double targetTotal) {
-    final currentContribution = test * 0.20 + assignment * 0.10 + project * 0.20;
-    final req = (targetTotal - currentContribution) / 0.50;
-    return req;
-  }
-
-  Widget gradeRow(String grade, int bound) {
-    final req = requiredFinalExamForTarget(bound.toDouble());
-    final reqClamped = req.isFinite ? req.clamp(0.0, 100.0) : double.nan;
-    String msg;
-    if (req.isNaN) msg = 'N/A';
-    else if (req <= 0) msg = 'Already guaranteed (no extra final needed)';
-    else if (req > 100) msg = 'Impossible (need >100%)';
-    else msg = '${reqClamped.toStringAsFixed(1)}% (min final exam required)';
-    return ListTile(
-      title: Text('$grade (>= $bound%)'),
-      subtitle: Text(msg),
+    // Load student's marks on init
+    Future.microtask(
+      () => Provider.of<AppState>(context, listen: false).loadMarks(),
     );
+  }
+
+  // Calculate required final exam mark based on carry
+  double calculateRequiredExam(double carry, int target) {
+    final needed = (target - carry) * 2; // Since carry is 50%
+    if (needed <= 0) return 0; // Already sufficient
+    if (needed > 100) return -1; // Impossible
+    return needed;
   }
 
   @override
   Widget build(BuildContext context) {
-    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    final carryContribution = test * 0.20 + assignment * 0.10 + project * 0.20;
+    final app = Provider.of<AppState>(context);
+    final marks = app.marks;
+
+    if (marks == null) {
+      return const Scaffold(
+        body: Center(child: Text('No marks available')),
+      );
+    }
+
+    // Compute carry mark (20% Test, 10% Assignment, 20% Project)
+    final test = (marks['test'] ?? 0).toDouble();
+    final assignment = (marks['assignment'] ?? 0).toDouble();
+    final project = (marks['project'] ?? 0).toDouble();
+
+    final carry = test * 0.2 + assignment * 0.1 + project * 0.2;
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Student — Carry Mark & Targets')),
+      appBar: AppBar(
+        title: const Text('Student — Carry Mark & Target'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: () {
+              app.logout();
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+              );
+            },
+          )
+        ],
+      ),
       body: Padding(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            Text('Student ID: $studentId'),
-            const SizedBox(height: 8),
-            Text(
-              'Test: ${test.toStringAsFixed(1)}  Assignment: ${assignment.toStringAsFixed(1)}  Project: ${project.toStringAsFixed(1)}',
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Carry contribution to final grade: ${carryContribution.toStringAsFixed(2)}% (out of 100)',
-            ),
-            const Divider(),
-            const Text('Target grades — required final exam mark to achieve lower bound of each grade:'),
-            Expanded(
-              child: ListView(
-                children: gradeBounds.entries.map((e) => gradeRow(e.key, e.value)).toList(),
+            // Carry mark card
+            Card(
+              child: ListTile(
+                title: const Text('Carry Mark (50%)'),
+                subtitle: Text(
+                  carry.toStringAsFixed(2),
+                  style: const TextStyle(
+                      fontSize: 22, fontWeight: FontWeight.bold),
+                ),
               ),
             ),
-            const Divider(),
-            ElevatedButton(
-              onPressed: () {
-                final app = Provider.of<AppState>(context, listen: false);
-                app.logout();
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(builder: (_) => const LoginScreen()),
-                );
-              },
-              child: const Text('Logout'),
+
+            const SizedBox(height: 20),
+            const Text(
+              'Final Exam Target for Each Grade',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
+
+            const SizedBox(height: 10),
+            // List of grade targets
+            Expanded(
+              child: ListView(
+                children: gradeTargets.entries.map((e) {
+                  final requiredExam = calculateRequiredExam(carry, e.value);
+
+                  return Card(
+                    child: ListTile(
+                      title: Text('Grade ${e.key} (${e.value}%)'),
+                      trailing: Text(
+                        requiredExam == -1
+                            ? 'Impossible'
+                            : '${requiredExam.toStringAsFixed(1)}%',
+                        style: const TextStyle(
+                            fontSize: 18, fontWeight: FontWeight.bold),
+                      ),
+                      subtitle: const Text('Required Final Exam Mark'),
+                    ),
+                  );
+                }).toList(),
+              ),
+            )
           ],
         ),
       ),
